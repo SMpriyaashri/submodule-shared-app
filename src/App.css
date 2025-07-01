@@ -13,6 +13,13 @@
   }
 }
 
+div[style*="align-items: center"]::before {
+  content: "Rs";
+  margin-right: 4px;
+  font-size: 1rem;
+  vertical-align: middle;
+}
+
 .App-header {
   background-color: #282c34;
   min-height: 100vh;

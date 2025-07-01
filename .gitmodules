@@ -1,0 +1,3 @@
+[submodule "main-app"]
+	path = main-app
+	url = ../main-app
