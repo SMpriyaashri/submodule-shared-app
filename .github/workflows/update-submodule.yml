@@ -1,0 +1,156 @@
+name: Auto Update Submodule
+
+on:
+  repository_dispatch:
+    types: [main-app-updated]
+  workflow_dispatch:
+    inputs:
+      manual_update:
+        description: 'Manual submodule update'
+        required: false
+        default: 'false'
+
+jobs:
+  update-submodule:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        token: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Configure Git
+      run: |
+        git config --global user.name 'github-actions[bot]'
+        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+        
+    - name: Get current submodule commit
+      id: current
+      run: |
+        cd main-app
+        echo "current_commit=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+        echo "current_branch=$(git rev-parse --abbrev-ref HEAD)" >> $GITHUB_OUTPUT
+        cd ..
+        
+    - name: Update submodule to latest
+      id: update
+      run: |
+        # Update submodule to latest commit on tracked branch
+        git submodule update --remote main-app
+        
+        # Get new commit hash
+        cd main-app
+        echo "new_commit=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+        echo "new_branch=$(git rev-parse --abbrev-ref HEAD)" >> $GITHUB_OUTPUT
+        cd ..
+        
+    - name: Check if update is needed
+      id: check
+      run: |
+        if [ "${{ steps.current.outputs.current_commit }}" != "${{ steps.update.outputs.new_commit }}" ]; then
+          echo "update_needed=true" >> $GITHUB_OUTPUT
+          echo "✅ Submodule update available"
+          echo "From: ${{ steps.current.outputs.current_commit }}"
+          echo "To: ${{ steps.update.outputs.new_commit }}"
+        else
+          echo "update_needed=false" >> $GITHUB_OUTPUT
+          echo "ℹ️ Submodule is already up to date"
+        fi
+        
+    - name: Commit and push submodule update
+      if: steps.check.outputs.update_needed == 'true'
+      run: |
+        # Stage the submodule update
+        git add main-app
+        
+        # Create commit message
+        if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
+          COMMIT_MSG="🤖 Auto-update submodule from ${{ github.event.client_payload.source_repo }}
+          
+          Triggered by: ${{ github.event.client_payload.commit_message }}
+          Author: ${{ github.event.client_payload.author }}
+          Commit: ${{ github.event.client_payload.commit_sha }}
+          
+          Updated main-app from ${{ steps.current.outputs.current_commit }} to ${{ steps.update.outputs.new_commit }}"
+        else
+          COMMIT_MSG="🤖 Manual submodule update
+          
+          Updated main-app from ${{ steps.current.outputs.current_commit }} to ${{ steps.update.outputs.new_commit }}"
+        fi
+        
+        # Commit and push
+        git commit -m "$COMMIT_MSG"
+        git push
+        
+    - name: Create summary comment
+      if: steps.check.outputs.update_needed == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const message = `## 🤖 Submodule Auto-Update Complete
+          
+          **Repository:** ${{ github.repository }}
+          **Trigger:** ${{ github.event_name }}
+          
+          ### Changes
+          - **main-app:** Updated from \`${{ steps.current.outputs.current_commit }}\` to \`${{ steps.update.outputs.new_commit }}\`
+          - **Branch:** ${{ steps.update.outputs.new_branch }}
+          
+          ### Trigger Details
+          ${
+            github.event_name === 'repository_dispatch' 
+              ? `- **Source:** ${{ github.event.client_payload.source_repo }}
+                 - **Commit:** ${{ github.event.client_payload.commit_sha }}
+                 - **Message:** ${{ github.event.client_payload.commit_message }}
+                 - **Author:** ${{ github.event.client_payload.author }}`
+              : '- **Manual trigger**'
+          }
+          
+          ✅ Submodule has been automatically updated!`;
+          
+          // Create a comment on the latest commit
+          github.rest.repos.createCommitComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            commit_sha: context.sha,
+            body: message
+          });
+          
+    - name: Skip update notification
+      if: steps.check.outputs.update_needed == 'false'
+      run: |
+        echo "ℹ️ No update needed - submodule is already at the latest commit"
+        
+    - name: Build and test after update
+      if: steps.check.outputs.update_needed == 'true'
+      run: |
+        # Install dependencies
+        npm ci
+        
+        # Build the project
+        npm run build
+        
+        # Run tests
+        npm test -- --watchAll=false
+        
+    - name: Notify on failure
+      if: failure()
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const message = `## ❌ Submodule Update Failed
+          
+          **Repository:** ${{ github.repository }}
+          **Workflow:** ${{ github.workflow }}
+          **Run ID:** ${{ github.run_id }}
+          
+          Please check the [workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.`;
+          
+          github.rest.repos.createCommitComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            commit_sha: context.sha,
+            body: message
+          }); 

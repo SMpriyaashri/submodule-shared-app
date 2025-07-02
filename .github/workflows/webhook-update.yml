@@ -1,0 +1,69 @@
+name: Scheduled Submodule Update
+
+on:
+  schedule:
+    # Run every hour
+    - cron: '0 * * * *'
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  update-submodule:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout with submodules
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        token: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Configure Git
+      run: |
+        git config --global user.name 'github-actions[bot]'
+        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+        
+    - name: Update submodule
+      id: update
+      run: |
+        # Store current commit
+        cd main-app
+        OLD_COMMIT=$(git rev-parse HEAD)
+        cd ..
+        
+        # Update submodule
+        git submodule update --remote main-app
+        
+        # Store new commit
+        cd main-app
+        NEW_COMMIT=$(git rev-parse HEAD)
+        cd ..
+        
+        # Check if there was an update
+        if [ "$OLD_COMMIT" != "$NEW_COMMIT" ]; then
+          echo "update=true" >> $GITHUB_OUTPUT
+          echo "old_commit=$OLD_COMMIT" >> $GITHUB_OUTPUT
+          echo "new_commit=$NEW_COMMIT" >> $GITHUB_OUTPUT
+          echo "✅ Submodule updated from $OLD_COMMIT to $NEW_COMMIT"
+        else
+          echo "update=false" >> $GITHUB_OUTPUT
+          echo "ℹ️ Submodule is already up to date"
+        fi
+        
+    - name: Commit and push if updated
+      if: steps.update.outputs.update == 'true'
+      run: |
+        git add main-app
+        git commit -m "🤖 Auto-update main-app submodule
+        
+        Updated from ${{ steps.update.outputs.old_commit }} to ${{ steps.update.outputs.new_commit }}
+        Triggered by: ${{ github.event_name }}"
+        git push
+        
+    - name: Build and test
+      if: steps.update.outputs.update == 'true'
+      run: |
+        npm ci
+        npm run build
+        npm test -- --watchAll=false 
